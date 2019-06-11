@@ -2,12 +2,14 @@ syntax = "proto3";
 package pb;
 
 import "google/api/annotations.proto";
+import "protoc-gen-swagger/options/annotations.proto";
+
+
 
 
 message StringMessage {
     string value = 1;
 }
-
 
 service EchoService {
     rpc Echo(StringMessage) returns (StringMessage) {
