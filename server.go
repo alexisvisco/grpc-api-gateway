@@ -2,11 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/golang/glog"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 	"log"
 	"net"
 	"net/http"
@@ -15,6 +10,12 @@ import (
 
 	pb "test-grpc-apigateway/proto"
 
+	"github.com/golang/glog"
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/reflection"
+
+	"github.com/grpc-ecosystem/go-grpc-middleware"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
@@ -22,10 +23,10 @@ import (
 type server struct{}
 
 func (server) Echo(c context.Context, s *pb.StringMessage) (*pb.StringMessage, error) {
-	fmt.Println(s.Value)
-	if strings.HasPrefix(s.Value, "e") {
-		return nil, status.New().Err()
-	}
+	md, _ := metadata.FromIncomingContext(c)
+	fmt.Println("authorization: ", md.Get("authorization"))
+	fmt.Println("user: ", c.Value("user"))
+
 	return &pb.StringMessage{
 		Value: strings.ToUpper(s.Value),
 	}, nil
@@ -78,7 +79,7 @@ func allowCORS(h http.Handler) http.Handler {
 	})
 }
 
-func Run(address string, opts ...runtime.ServeMuxOption) error {
+func Run(address string) error {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -88,7 +89,10 @@ func Run(address string, opts ...runtime.ServeMuxOption) error {
 
 	mux.HandleFunc("/swagger/", serveSwagger)
 
-	gw, err := newGateway(ctx, opts...)
+	gw, err := newGateway(ctx, runtime.WithIncomingHeaderMatcher(func(s string) (s2 string, b bool) {
+		return s, s == "authorization"
+	}))
+
 	if err != nil {
 		return err
 	}
@@ -103,7 +107,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
-	s := grpc.NewServer()
+	s := grpc.NewServer(grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(userAuthenticationMiddleware)))
 	pb.RegisterEchoServiceServer(s, &server{})
 	reflection.Register(s)
 	go func() {
@@ -112,7 +116,15 @@ func main() {
 		}
 	}()
 
+	fmt.Println("listening on 8080")
 	if err := Run(":8080"); err != nil {
 		glog.Fatal(err)
 	}
+}
+
+func userAuthenticationMiddleware(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	fmt.Println("authorization from mw: ", md.Get("authorization"))
+
+	return handler(context.WithValue(ctx, "user", 159), req)
 }

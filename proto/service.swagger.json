@@ -1,8 +1,8 @@
 {
   "swagger": "2.0",
   "info": {
-    "title": "proto/service.proto",
-    "version": "version not set"
+    "title": "example",
+    "version": "1.0"
   },
   "schemes": [
     "http",
@@ -15,8 +15,8 @@
     "application/json"
   ],
   "paths": {
-    "/v1/example/echo": {
-      "post": {
+    "/v1/echo/{value}": {
+      "get": {
         "operationId": "Echo",
         "responses": {
           "200": {
@@ -28,16 +28,19 @@
         },
         "parameters": [
           {
-            "name": "body",
-            "in": "body",
+            "name": "value",
+            "in": "path",
             "required": true,
-            "schema": {
-              "$ref": "#/definitions/pbStringMessage"
-            }
+            "type": "string"
           }
         ],
         "tags": [
           "EchoService"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          }
         ]
       }
     }
@@ -51,5 +54,17 @@
         }
       }
     }
-  }
+  },
+  "securityDefinitions": {
+    "ApiKey": {
+      "type": "apiKey",
+      "name": "authorization",
+      "in": "header"
+    }
+  },
+  "security": [
+    {
+      "ApiKey": []
+    }
+  ]
 }
