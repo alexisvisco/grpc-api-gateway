@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	pb "test-grpc-apigateway/proto"
 
@@ -21,6 +22,24 @@ import (
 )
 
 type server struct{}
+
+func (server) EchoStream(input *pb.StringMessage, output pb.EchoService_EchoStreamServer) error {
+	i := 0
+	for {
+		if i > 10 {
+			output.Context().Done()
+			break
+		}
+		err := output.Send(input)
+		if err != nil {
+			fmt.Println("stream error", err)
+			output.Context().Done()
+		}
+		time.Sleep(2 * time.Second)
+		i++
+	}
+	return nil
+}
 
 func (server) Echo(c context.Context, s *pb.StringMessage) (*pb.StringMessage, error) {
 	md, _ := metadata.FromIncomingContext(c)
@@ -40,6 +59,17 @@ func main() {
 
 	registerGRPCServer(lis)
 	registerGRPCGateway()
+}
+
+func registerGRPCServer(lis net.Listener) {
+	s := grpc.NewServer(grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(userAuthenticationMiddleware)))
+	pb.RegisterEchoServiceServer(s, &server{})
+	reflection.Register(s)
+	go func() {
+		if err := s.Serve(lis); err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
+	}()
 }
 
 func registerGRPCGateway() {
@@ -76,20 +106,15 @@ func Run(address string) error {
 	return http.ListenAndServe(address, allowCORS(mux))
 }
 
-func registerGRPCServer(lis net.Listener) {
-	s := grpc.NewServer(grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(userAuthenticationMiddleware)))
-	pb.RegisterEchoServiceServer(s, &server{})
-	reflection.Register(s)
-	go func() {
-		if err := s.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
-		}
-	}()
-}
-
 func userAuthenticationMiddleware(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	fmt.Println("mw method", info.FullMethod)
 	md, _ := metadata.FromIncomingContext(ctx)
 	fmt.Println("authorization from mw: ", md.Get("authorization"))
+
+	switch req.(type) {
+	case *pb.StringMessage:
+		fmt.Println("mw : StringMessage")
+	}
 
 	return handler(context.WithValue(ctx, "user", 159), req)
 }

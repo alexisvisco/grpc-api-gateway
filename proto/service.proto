@@ -47,4 +47,18 @@ service EchoService {
             }
         };
     }
+
+    rpc EchoStream(StringMessage) returns (stream StringMessage) {
+        option (google.api.http) = {
+            get: "/v1/stream/echo/{value}"
+        };
+        option (grpc.gateway.protoc_gen_swagger.options.openapiv2_operation) = {
+            security: {
+            	security_requirement: {
+            		key: "ApiKey";
+            		value: {}
+                }
+            }
+        };
+    }
 }
