@@ -32,14 +32,72 @@ func (server) Echo(c context.Context, s *pb.StringMessage) (*pb.StringMessage, e
 	}, nil
 }
 
-func newGateway(ctx context.Context, opts ...runtime.ServeMuxOption) (http.Handler, error) {
-	mux := runtime.NewServeMux(opts...)
+func main() {
+	lis, err := net.Listen("tcp", ":5050")
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	registerGRPCServer(lis)
+	registerGRPCGateway()
+}
+
+func registerGRPCGateway() {
+	fmt.Println("listening on 8080")
+	if err := Run(":8080"); err != nil {
+		glog.Fatal(err)
+	}
+}
+
+func gatewayHandler(ctx context.Context) (http.Handler, error) {
+	mux := runtime.NewServeMux(headerMatcher())
 	dialOpts := []grpc.DialOption{grpc.WithInsecure()}
 	err := pb.RegisterEchoServiceHandlerFromEndpoint(ctx, mux, ":5050", dialOpts)
 	if err != nil {
 		return nil, err
 	}
 	return mux, nil
+}
+
+func Run(address string) error {
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/swagger/", serveSwagger)
+
+	gw, err := gatewayHandler(ctx)
+	if err != nil {
+		return err
+	}
+	mux.Handle("/", gw)
+
+	return http.ListenAndServe(address, allowCORS(mux))
+}
+
+func registerGRPCServer(lis net.Listener) {
+	s := grpc.NewServer(grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(userAuthenticationMiddleware)))
+	pb.RegisterEchoServiceServer(s, &server{})
+	reflection.Register(s)
+	go func() {
+		if err := s.Serve(lis); err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
+	}()
+}
+
+func userAuthenticationMiddleware(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	fmt.Println("authorization from mw: ", md.Get("authorization"))
+
+	return handler(context.WithValue(ctx, "user", 159), req)
+}
+
+func headerMatcher() runtime.ServeMuxOption {
+	return runtime.WithIncomingHeaderMatcher(func(s string) (s2 string, b bool) {
+		return s, s == "authorization"
+	})
 }
 
 func serveSwagger(w http.ResponseWriter, r *http.Request) {
@@ -55,15 +113,6 @@ func serveSwagger(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, p)
 }
 
-func preflightHandler(w http.ResponseWriter, r *http.Request) {
-	headers := []string{"Content-Type", "Accept"}
-	w.Header().Set("Access-Control-Allow-Headers", strings.Join(headers, ","))
-	methods := []string{"GET", "HEAD", "POST", "PUT", "DELETE"}
-	w.Header().Set("Access-Control-Allow-Methods", strings.Join(methods, ","))
-	glog.Infof("preflight request for %s", r.URL.Path)
-	return
-}
-
 // allowCORS allows Cross Origin Resoruce Sharing from any origin.
 // Don't do this without consideration in production systems.
 func allowCORS(h http.Handler) http.Handler {
@@ -71,7 +120,7 @@ func allowCORS(h http.Handler) http.Handler {
 		if origin := r.Header.Get("Origin"); origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			if r.Method == "OPTIONS" && r.Header.Get("Access-Control-Request-Method") != "" {
-				preflightHandler(w, r)
+				setCorsHeaders(w, r)
 				return
 			}
 		}
@@ -79,52 +128,11 @@ func allowCORS(h http.Handler) http.Handler {
 	})
 }
 
-func Run(address string) error {
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	//mux := runtime.NewServeMux()
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/swagger/", serveSwagger)
-
-	gw, err := newGateway(ctx, runtime.WithIncomingHeaderMatcher(func(s string) (s2 string, b bool) {
-		return s, s == "authorization"
-	}))
-
-	if err != nil {
-		return err
-	}
-	mux.Handle("/", gw)
-
-	return http.ListenAndServe(address, allowCORS(mux))
-
-}
-
-func main() {
-	lis, err := net.Listen("tcp", ":5050")
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-	s := grpc.NewServer(grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(userAuthenticationMiddleware)))
-	pb.RegisterEchoServiceServer(s, &server{})
-	reflection.Register(s)
-	go func() {
-		if err := s.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
-		}
-	}()
-
-	fmt.Println("listening on 8080")
-	if err := Run(":8080"); err != nil {
-		glog.Fatal(err)
-	}
-}
-
-func userAuthenticationMiddleware(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	fmt.Println("authorization from mw: ", md.Get("authorization"))
-
-	return handler(context.WithValue(ctx, "user", 159), req)
+func setCorsHeaders(w http.ResponseWriter, r *http.Request) {
+	headers := []string{"Content-Type", "Accept"}
+	w.Header().Set("Access-Control-Allow-Headers", strings.Join(headers, ","))
+	methods := []string{"GET", "HEAD", "POST", "PUT", "DELETE"}
+	w.Header().Set("Access-Control-Allow-Methods", strings.Join(methods, ","))
+	glog.Infof("preflight request for %s", r.URL.Path)
+	return
 }
